@@ -41,6 +41,14 @@ codex mcp list
 2. 选一个测试聊天，请它向这个 Codex 原聊天发「请回复 BRIDGE_OK」，然后等回执。你可以在 Codex 原聊天中核对收到的消息，在 Antigravity 原聊天中看到回执。
 3. 正式派工时，在 Antigravity 里确认目标和验收要求，再交给 Codex。桥会把回执操作写入正式派工消息。普通交流按原文发送。
 
+## 两边怎么分工
+
+- **Antigravity 先和你定方向。** 把需求、取舍、初步路线和验收条件谈清楚，再发到对应的 Codex 原聊天。每次正式指导工作或负责阶段验收时，使用 `purpose: coordination` 附上分工和回执说明。
+- **Codex 负责做完。** 补齐实施计划，完成开发、测试和技术验收，自主处理日常选择和能继续推进的工作。到可验收的里程碑、确实卡住或遇到重大路线分歧时，才发一段带证据的回执。说明书等面向读者、需要认真打磨的大段写作可以交给 Antigravity。
+- **Antigravity 审阅阶段结果。** 对照路线图检查有没有偏离目标，用清楚的语言总结成果和证据。重大分歧先读路线图，再给判断和建议。需要你拍板或新增授权时才提问。你已授权的无人值守范围内，可以先按路线图选可逆的方案并记录。决定发回同一个 Codex 聊天继续执行。
+
+[Antigravity 协调规则](rules/AGENTS.md) · [Codex 执行和回执规则](docs/codex-role.md)
+
 ## 数据和权限
 
 桥接入本机 Codex 桌面已有会话后，可以读取、发送和管理这些会话。全局安装会把工具提供给 Antigravity 的各个聊天。权限仍由各客户端管理，转发资料时注意接收方。登录凭证由各客户端保管。桥把路由、投递记录、回执正文和自动生成的本机控制密钥存放在 `%USERPROFILE%\.codex-conversation-bridge`，通过本机命名管道和回环接口通信。模型调用仍走原客户端和账号。 [Codex App Server](https://learn.chatgpt.com/docs/app-server)
@@ -82,4 +90,4 @@ node .\src\daily.mjs control bridge_shutdown
 
 ## 许可证
 
-公开再分发的许可证待项目所有者确定。Codex、Antigravity 和 Node.js 各自单独安装，适用各自条款。
+本项目原创代码和文档采用 [MIT 许可证](LICENSE)。Codex、Antigravity 和 Node.js 各自单独安装，适用各自条款。

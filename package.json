@@ -8,5 +8,6 @@
   },
   "codexBridge": {
     "portable": true
-  }
+  },
+  "license": "MIT"
 }

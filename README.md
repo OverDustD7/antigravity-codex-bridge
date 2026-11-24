@@ -41,6 +41,14 @@ codex mcp list
 2. Pick a disposable chat and ask Antigravity to send “Reply with BRIDGE_OK” to that exact chat, then wait for a reply. You should see the message in the original Codex chat and the receipt in the original Antigravity chat.
 3. For real work, ask Antigravity to pass the goal and acceptance criteria to Codex and wait for the next milestone. The coordination handoff includes the feedback command for Codex. Ordinary messages preserve your wording.
 
+## How the two agents work together
+
+- **Antigravity shapes the work with you.** It clarifies the goal, trade-offs, approximate plan, and acceptance criteria. It sends the handoff to the relevant Codex chat. `purpose: coordination` attaches the roles and reporting instructions whenever Antigravity directs the work or owns acceptance.
+- **Codex does the work.** It refines the plan, implements and tests it, makes routine technical decisions, and continues every authorized task it can. It reports deliverable milestones, meaningful blockers, and material decisions in plain language with evidence. It hands off substantial audience-facing writing when that work benefits from Antigravity's review.
+- **Antigravity reviews meaningful results.** It checks progress against the roadmap, explains the evidence in language you can use, and flags drift. For a major decision it reads the roadmap first, makes a recommendation, and asks you when the decision requires your judgment or authorization. Within an agreed unattended scope it can choose a reversible option that fits the roadmap and record it. Your decision goes back to the same Codex chat.
+
+[Antigravity rules](rules/AGENTS.md) · [Codex implementation and reporting rules](docs/codex-role.md)
+
 ## Data and permissions
 
 This plugin can read, send to, and manage local Codex chats available to your desktop session. A global installation exposes the bridge tools in your Antigravity chats. Use the normal client permission controls and only relay material appropriate for the receiving chat. Both apps keep their respective sign-in credentials. The bridge keeps local routing, delivery history, receipt text, and a generated local control key under `%USERPROFILE%\.codex-conversation-bridge`. It uses local named pipes and a loopback App Server connection. The model requests run through your existing apps and accounts. [Codex App Server](https://learn.chatgpt.com/docs/app-server)
@@ -82,4 +90,4 @@ If you registered the optional Codex MCP server, remove it with `codex mcp remov
 
 ## Licensing
 
-Licensing for public redistribution is pending. The Codex and Antigravity apps and the Node.js runtime are installed separately and remain under their own terms.
+The project's original code and documentation are available under the [MIT License](LICENSE). The Codex and Antigravity apps and the Node.js runtime are installed separately and remain under their own terms.
