@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { root } from './config.mjs';
 import { BridgeError } from './protocol.mjs';
+import { receiptWakeFilter } from './store.mjs';
 
 const conversationPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -80,7 +81,7 @@ export class DesktopDelivery {
       const job = this.store.get(`SELECT e.seq, e.thread, e.kind, t.conversation FROM events e
         JOIN push_targets t ON t.thread = e.thread
         LEFT JOIN push_deliveries d ON d.event = e.seq
-        WHERE t.enabled = 1 AND (d.state = 'retry' OR (d.event IS NULL AND e.seq > t.cursor))
+        WHERE t.enabled = 1 AND ${receiptWakeFilter} AND (d.state = 'retry' OR (d.event IS NULL AND e.seq > t.cursor))
         ${this.globalSessions ? `AND (
           EXISTS (SELECT 1 FROM daily_routes r WHERE r.thread=e.thread AND r.turn=e.turn AND r.conversation=t.conversation) OR
           EXISTS (SELECT 1 FROM daily_messages m WHERE m.event=e.seq AND m.conversation=t.conversation AND m.path='sidecar')

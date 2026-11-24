@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 
+export const receiptWakeFilter = "kind <> 'transport_error' AND coalesce(json_extract(body, '$.silent'), 0) = 0";
+
 export class Store extends EventEmitter {
   constructor(path) {
     super();
@@ -52,7 +54,7 @@ export class Store extends EventEmitter {
       thread, turn, key, kind, JSON.stringify(body), at
     );
     if (!changes) return { eventId: this.get('SELECT seq FROM events WHERE thread = ? AND key = ?', thread, key).seq, duplicate: true };
-    queueMicrotask(() => this.emit('event', thread));
+    if (kind !== 'transport_error' && !body.silent) queueMicrotask(() => this.emit('event', thread));
     return { eventId: Number(lastInsertRowid), duplicate: false };
   }
 
@@ -60,14 +62,15 @@ export class Store extends EventEmitter {
     return { eventId: row.seq, threadId: row.thread, turnId: row.turn, kind: row.kind, at: row.at, ...JSON.parse(row.body) };
   }
 
-  events(threads, after, limit) {
-    return this.all(`SELECT * FROM events WHERE seq > ? AND thread IN (${threads.map(() => '?').join(',')}) ORDER BY seq LIMIT ?`,
+  events(threads, after, limit, notificationsOnly = false) {
+    return this.all(`SELECT * FROM events WHERE seq > ? AND thread IN (${threads.map(() => '?').join(',')})
+      ${notificationsOnly ? `AND ${receiptWakeFilter}` : ''} ORDER BY seq LIMIT ?`,
       after, ...threads, limit).map(row => this.eventRecord(row));
   }
 
   wait(threads, after, signal) {
     return this.onUpdate('event', () => {
-      const event = this.events(threads, after, 1)[0];
+      const event = this.events(threads, after, 1, true)[0];
       return event && { event, nextCursor: event.eventId };
     }, signal, thread => !thread || threads.includes(thread));
   }

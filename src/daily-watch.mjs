@@ -1,4 +1,5 @@
 import { BridgeError } from './protocol.mjs';
+import { receiptWakeFilter } from './store.mjs';
 
 export class DailyWatch {
   constructor(store) {
@@ -76,7 +77,7 @@ export class DailyWatch {
     this.active.set(key, controller);
     try {
       return await this.store.onUpdate('event', () => {
-        const row = this.store.get(`SELECT e.* FROM events e WHERE e.thread=? AND e.seq>? AND (
+        const row = this.store.get(`SELECT e.* FROM events e WHERE e.thread=? AND e.seq>? AND ${receiptWakeFilter} AND (
           EXISTS (SELECT 1 FROM daily_routes r WHERE r.thread=e.thread AND r.turn=e.turn AND r.conversation=?) OR
           EXISTS (SELECT 1 FROM daily_messages m WHERE m.event=e.seq AND m.conversation=? AND m.path='background_wait')
         ) ORDER BY e.seq LIMIT 1`, threadId, cursor, conversationId, conversationId);

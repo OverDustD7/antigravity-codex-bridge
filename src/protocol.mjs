@@ -30,20 +30,25 @@ export const feedbackSchema = schema({
   impact: summary
 }, ['kind', 'summary']);
 
+export const milestoneContinuation = 'Milestone reporting is an additional progress update. Continue the next authorized step in this same turn and keep the original event listener for work in flight.';
+export const milestoneCadence = 'Balance Gemini usage with timely course correction. Combine nearby steps and short stages into one brief milestone report and check in during long stages while a change is still practical. Include the result, key evidence and next step.';
+export const milestoneReview = '请用人话给用户讲清结果、关键证据、影响和下一步。用已确认的路线图核对本阶段目标、验收条件及关键约束。已读且未变的段落可沿用。只在方向重大偏移或证据支持更好的下一步时联系原 Codex 聊天。Codex 继续执行，无需阶段确认。';
+
 export const feedbackTool = {
   type: 'function', name: 'bridge_report', deferLoading: false,
-  description: 'Send a concise paragraph to the originating Antigravity bridge about a milestone, final result, writing handoff, blocker or consequential decision. For a route question, include relevant evidence or a roadmap location in the paragraph. Continue independent work. Ordinary progress and routine choices belong inside Codex.',
+  description: `Send a concise paragraph to Antigravity about a milestone, final result, writing handoff, blocker or consequential decision. ${milestoneCadence} ${milestoneContinuation} For a route question, include the evidence or roadmap location.`,
   inputSchema: feedbackSchema
 };
 
 export const feedbackScriptSchema = schema({ threadId, turnId: threadId, reportId: id, feedback: feedbackSchema }, ['threadId', 'turnId', 'reportId', 'feedback']);
 export const nativeFeedbackPrefix = 'AGY_CODEX_FEEDBACK_V1 ';
-export const resumableWaits = new Set(['codex_wait', 'codex_wait_dispatch', 'codex_panel_wait']);
+export const resumableWaits = new Set(['codex_wait', 'codex_wait_dispatch', 'codex_panel_wait', 'desktop_take']);
 
 export function receiptText({ event, nextCursor }) {
   if (event.kind === 'agy_message') return `${event.summary}\n\n会话消息 #${event.eventId} · nextCursor=${nextCursor}`;
   const artifacts = event.artifacts?.length ? `产物 ${event.artifacts.join('、')}` : '';
-  const prose = [event.summary, event.notice, event.finalOutput, event.evidence, artifacts, event.error].filter(Boolean).join('\n\n');
+  const prose = [event.summary, event.notice, event.finalOutput, event.evidence, artifacts, event.error,
+    event.kind === 'milestone' && milestoneReview].filter(Boolean).join('\n\n');
   return `${prose}\n\n回执 #${event.eventId} · ${event.kind} · threadId=${event.threadId} · nextCursor=${nextCursor}`.trim();
 }
 

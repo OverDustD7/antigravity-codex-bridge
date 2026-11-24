@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { invoke } from './client.mjs';
+import { milestoneContinuation } from './protocol.mjs';
 
 const [requestId, reportId, input = '--stdin', kind] = process.argv.slice(2);
 try {
@@ -11,7 +12,7 @@ try {
   const data = readFileSync(plainText || input === '--stdin' ? 0 : input, 'utf8').replace(/^\uFEFF/, '');
   const feedback = plainText ? { kind, summary: data.trim() } : JSON.parse(data);
   const result = await invoke('desktop_work_report', { requestId, threadId, reportId, feedback }, AbortSignal.timeout(90_000));
-  console.log(JSON.stringify(result));
+  console.log(JSON.stringify(result.ok && feedback.kind === 'milestone' ? { ...result, continuation: milestoneContinuation } : result));
   if (!result.ok) process.exitCode = 1;
 } catch (error) {
   console.error(error.message);

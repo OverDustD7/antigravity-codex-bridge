@@ -56,7 +56,7 @@ const server = createServer(async (request, response) => {
       }
       return send(response, 200, { ok: true, state: 'stopping' });
     }
-    if (resumableWaits.has(name) || name === 'desktop_take') waiting.set(response, cancel);
+    if (resumableWaits.has(name)) waiting.set(response, cancel);
     if (daily && resumeWait === true && name === 'codex_wait' && typeof args?.conversationId === 'string' &&
       typeof args?.threadIds?.[0] === 'string' && store.get('SELECT 1 FROM daily_watches WHERE conversation=? AND thread=? AND enabled=0', args.conversationId, args.threadIds[0])) {
       return send(response, 200, { ok: false, code: 'AGY_WAIT_PAUSED', message: 'This conversation paused its receipt watch.' });

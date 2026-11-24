@@ -7,7 +7,7 @@ import { allowIsolatedDispatch, root, sharedProjectFile, workspaces } from './co
 import { DesktopDelivery, isBridgeProject } from './desktop.mjs';
 import { DesktopOperator } from './desktop-operator.mjs';
 import { savedDesktopProject } from './desktop-projects.mjs';
-import { BridgeError, feedbackSchema, feedbackScriptSchema, feedbackTool, nativeFeedbackPrefix, tools, validate } from './protocol.mjs';
+import { BridgeError, feedbackSchema, feedbackScriptSchema, feedbackTool, milestoneContinuation, nativeFeedbackPrefix, tools, validate } from './protocol.mjs';
 import { startSharedDesktopHost } from './shared-desktop-host.mjs';
 import { isNativeFeedbackCommand } from './native-feedback.mjs';
 
@@ -256,15 +256,18 @@ export class Bridge {
     try { return await next; } finally { if (this.locks.get(id) === next) this.locks.delete(id); }
   }
 
-  async action(name, args, task) {
+  async action(name, args, task, isUndispatched) {
     const hash = createHash('sha256').update(JSON.stringify([name, canon(args)])).digest('hex');
     const prior = this.store.get('SELECT * FROM actions WHERE id = ?', args.requestId);
     if (prior) {
       if (prior.hash !== hash) throw new BridgeError('REQUEST_ID_REUSED', 'This request ID already belongs to another action or arguments.');
       if (prior.state === 'finished') return { ...JSON.parse(prior.result), replayed: true };
-      throw new BridgeError('REQUEST_IN_FLIGHT_OR_UNCERTAIN', 'The original action is pending or its delivery is uncertain. The bridge will not dispatch it twice.');
+      if (this.executingActions.has(args.requestId) || !isUndispatched?.()) {
+        throw new BridgeError('REQUEST_IN_FLIGHT_OR_UNCERTAIN', 'The original action is pending or its delivery is uncertain. The bridge will not dispatch it twice.');
+      }
+    } else {
+      this.store.run("INSERT INTO actions (id, hash, state) VALUES (?, ?, 'started')", args.requestId, hash);
     }
-    this.store.run("INSERT INTO actions (id, hash, state) VALUES (?, ?, 'started')", args.requestId, hash);
     this.executingActions.add(args.requestId);
     try {
       const result = { ok: true, requestId: args.requestId, ...await task() };
@@ -274,6 +277,8 @@ export class Bridge {
       if (error instanceof BridgeError || error instanceof NativeError) {
         const result = { ok: false, requestId: args.requestId, code: error.code, message: error.message };
         this.store.run("UPDATE actions SET state = 'finished', result = ? WHERE id = ?", JSON.stringify(result), args.requestId);
+      } else if (isUndispatched?.()) {
+        throw new BridgeError('CODEX_MESSAGE_NOT_SENT', `${error.message} No message was dispatched. Retry with the same request ID and arguments.`);
       }
       throw error;
     } finally { this.executingActions.delete(args.requestId); }
@@ -565,10 +570,14 @@ export class Bridge {
       this.store.run('UPDATE turns SET status = ?, final_text = ? WHERE thread = ? AND id = ?', turn.status, text, threadId, turn.id);
       const activeReport = !!this.store.get("SELECT 1 AS found FROM events WHERE thread = ? AND turn = ? AND key LIKE 'report:%'", threadId, turn.id);
       if (!activeReport || turn.status !== 'completed') {
+        // An empty interruption inferred after disconnect is diagnostic, not a new receipt.
+        const offlineInterruption = recovered && turn.status === 'interrupted' && !text && !turn.error &&
+          this.store.get('SELECT 1 FROM events WHERE thread = ? AND key = ?', threadId, `lost:${turn.id}`);
         this.store.event(threadId, turn.id, `closed:${turn.id}`, activeReport ? 'turn_error' : 'turn_fallback', {
           source: 'codex_native_turn', activeReport, status: turn.status, finalOutput: shorten(text),
           notice: activeReport ? 'Codex 主动报告后，本轮异常结束。' : 'Codex 本轮未调用反馈工具。以下为原生回合最终输出。',
-          ...(turn.error ? { error: shorten(turn.error.message, 1000) } : {}), ...(recovered ? { recovered } : {})
+          ...(turn.error ? { error: shorten(turn.error.message, 1000) } : {}), ...(recovered ? { recovered } : {}),
+          ...(offlineInterruption ? { silent: true } : {})
         });
       }
     });
@@ -617,11 +626,12 @@ export class Bridge {
     const key = `report:${turnId}:${reportId}`;
     const prior = this.store.get('SELECT seq, body FROM events WHERE thread = ? AND key = ?', threadId, key);
     const data = { ...body, activeReport: true, source };
+    const continuation = body.kind === 'milestone' ? { continuation: milestoneContinuation } : {};
     if (prior) {
       if (JSON.stringify(canon(data)) !== JSON.stringify(canon(JSON.parse(prior.body)))) {
         throw new BridgeError('REPORT_ID_REUSED', 'The report ID is already bound to different content.');
       }
-      return { eventId: prior.seq, duplicate: true, threadId, turnId, state: 'persisted_in_antigravity_inbox' };
+      return { eventId: prior.seq, duplicate: true, threadId, turnId, state: 'persisted_in_antigravity_inbox', ...continuation };
     }
     const pending = this.pendingTurn(threadId);
     const exactTurn = pending?.id === turnId && (pending.status === 'inProgress' || (recovered && pending.status === 'uncertain'));
@@ -629,7 +639,7 @@ export class Bridge {
       throw new BridgeError('TURN_MISMATCH', 'Feedback must belong to the active turn of this registered chat.');
     }
     const receipt = this.store.event(threadId, turnId, key, body.kind, data);
-    return { ...receipt, threadId, turnId, state: 'persisted_in_antigravity_inbox' };
+    return { ...receipt, threadId, turnId, state: 'persisted_in_antigravity_inbox', ...continuation };
   }
 
   async history(threadId, { cursor, limit = 10 } = {}) {

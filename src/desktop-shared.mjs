@@ -1,7 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import { invoke, upgradeDormantBridge } from './client.mjs';
+import { nativeDesktopSelection } from './config.mjs';
 import { sharedEndpoint } from './shared-desktop-host.mjs';
 
 async function desktopExecutable() {
@@ -38,10 +41,17 @@ try {
     console.log(JSON.stringify(result));
   } else if ((action === 'open' && validThread) || (action === 'startup' && !threadId)) {
     const executable = await desktopExecutable();
-    const running = await existingDesktopIsRunning(executable);
     const env = { ...process.env };
     for (const name of Object.keys(env)) if (name.startsWith('CODEX_') || name === 'OPENAI_API_KEY') delete env[name];
     const args = threadId ? [`codex://threads/${threadId}`] : [];
+    if (existsSync(nativeDesktopSelection)) {
+      const { adapter } = JSON.parse(readFileSync(nativeDesktopSelection, 'utf8'));
+      if (!isAbsolute(adapter ?? '') || !existsSync(adapter)) throw new Error('The registered Codex desktop adapter is missing. Reinstall or remove it.');
+      await launchDesktop(executable, { ...env, CODEX_CLI_PATH: adapter }, args);
+      console.log(JSON.stringify({ ok: true, state: 'normal_desktop_launch', ...(threadId && { threadId }) }));
+      process.exit(0);
+    }
+    const running = await existingDesktopIsRunning(executable);
     if (running) {
       const status = await invoke('desktop_shared_status', {});
       if (!status.ok) throw new Error(status.message ?? status.code);

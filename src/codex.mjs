@@ -12,6 +12,13 @@ export class NativeError extends Error {
   }
 }
 
+export class NativeRequestNotSentError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.code = 'CODEX_REQUEST_NOT_SENT';
+  }
+}
+
 export function codexExecutable() {
   if (process.env.BRIDGE_CODEX_EXE) return process.env.BRIDGE_CODEX_EXE;
   if (process.platform !== 'win32') return 'codex';
@@ -124,7 +131,7 @@ export class Codex {
 
   write(message) {
     if (this.socket?.readyState === WebSocket.OPEN) return this.socket.send(JSON.stringify(message));
-    if (!this.child?.stdin.writable) throw new Error('Codex App Server is disconnected.');
+    if (!this.child?.stdin.writable) throw new NativeRequestNotSentError('Codex App Server is disconnected.');
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 

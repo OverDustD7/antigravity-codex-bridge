@@ -69,7 +69,10 @@ const mcpClient = (command, args, cwd) => {
 await run('tar.exe', ['-xf', resolve(archive), '-C', unpacked]);
 await run('agy.exe', ['plugin', 'validate', '--strict', resolve(archive)]);
 const unpackDirectory = await readdir(unpacked);
-assert.deepEqual(unpackDirectory.sort(), ['README.md', 'README.zh-CN.md', 'docs', 'hooks.json', 'mcp_config.json', 'package.json', 'plugin.json', 'rules', 'sidecars', 'src'].sort());
+assert.deepEqual(unpackDirectory.sort(), ['LICENSE', 'README.md', 'README.zh-CN.md', 'RELEASE-NOTES.md', 'docs', 'hooks.json', 'mcp_config.json', 'package.json', 'plugin.json', 'rules', 'scripts', 'sidecars', 'src'].sort());
+assert.match(await readFile(join(unpacked, 'LICENSE'), 'utf8'), /^MIT License\r?\n/);
+assert.equal(JSON.parse(await readFile(join(unpacked, 'package.json'), 'utf8')).license, 'MIT');
+assert.deepEqual((await readdir(join(unpacked, 'scripts'))).sort(), ['CodexDesktopTransport.cs', 'setup-windows-native-desktop.ps1']);
 assert.deepEqual(await list(), [], 'The Antigravity CLI must use only the clean fixture configuration.');
 const manifest = JSON.parse(await readFile(join(unpacked, 'plugin.json'), 'utf8'));
 assert.equal(manifest.name, 'codex-conversation-bridge');

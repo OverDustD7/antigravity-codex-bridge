@@ -17,12 +17,20 @@ export function sharedEndpoint(value) {
   return url.href;
 }
 
-function openNative(home, token) {
+function openNative(home, token, desktop) {
+  const hash = createHash('sha256').update(token).digest('hex');
+  const transport = ['--listen', `ws://${address}:0`, '--ws-auth', 'capability-token', '--ws-token-sha256', hash];
+  if (desktop) {
+    // This core is still launched by the official desktop transport and retains its callback environment.
+    const env = { ...process.env, CODEX_APP_RUNTIME_CLI_PATH: desktop.executable };
+    return spawn(desktop.executable, [...desktop.args, ...transport], {
+      env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true
+    });
+  }
   const env = { ...process.env };
   for (const name of Object.keys(env)) if (name.startsWith('CODEX_') || name === 'OPENAI_API_KEY') delete env[name];
   if (home) env.CODEX_HOME = home;
-  const hash = createHash('sha256').update(token).digest('hex');
-  return spawn(codexExecutable(), ['app-server', '--listen', `ws://${address}:0`, '--ws-auth', 'capability-token', '--ws-token-sha256', hash, '-c', 'thread_unload_delay_secs=1'], {
+  return spawn(codexExecutable(), ['app-server', ...transport, '-c', 'thread_unload_delay_secs=1'], {
     cwd: root, env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true
   });
 }
@@ -43,10 +51,10 @@ function nativePort(child) {
   });
 }
 
-export async function startSharedDesktopHost({ codexHome } = {}) {
+export async function startSharedDesktopHost({ codexHome, desktop } = {}) {
   const token = randomBytes(32).toString('hex');
   const path = `/codex-bridge/${randomBytes(32).toString('hex')}`;
-  const child = openNative(codexHome, token);
+  const child = openNative(codexHome, token, desktop);
   const sockets = new Set();
   const connected = new Set();
   const events = new EventEmitter();
@@ -96,6 +104,7 @@ export async function startSharedDesktopHost({ codexHome } = {}) {
     await once(gateway, 'listening');
     return {
       endpoint: `ws://${address}:${gateway.address().port}${path}`, close, closed: once(child, 'close'),
+      forwardDiagnostics(stream) { child.stderr.pipe(stream, { end: false }); },
       get connectionCount() { return connected.size; },
       async waitForDesktop(signal) {
         while (connected.size < 2) await once(events, 'connected', { signal });

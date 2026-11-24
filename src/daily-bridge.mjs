@@ -3,12 +3,13 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Bridge } from './bridge.mjs';
-import { existingSharedEndpoint } from './client.mjs';
+import { existingSharedConnection } from './client.mjs';
+import { NativeRequestNotSentError } from './codex.mjs';
 import { scriptCommand } from './config.mjs';
 import { DailyWatch } from './daily-watch.mjs';
 import { DesktopDelivery } from './desktop.mjs';
 import { watchNativeFeedback } from './native-feedback.mjs';
-import { agyMessagingTools, BridgeError, tools, validate } from './protocol.mjs';
+import { agyMessagingTools, BridgeError, milestoneCadence, milestoneContinuation, tools, validate } from './protocol.mjs';
 
 const specs = new Map([...tools, ...agyMessagingTools].map(tool => [tool.name, tool.inputSchema]));
 const terminal = new Set(['completed', 'failed', 'interrupted']);
@@ -21,12 +22,18 @@ const matchKey = value => String(value ?? '').trim().replaceAll('\\', '/').toLow
 const projectKeys = project => [project.name, project.projectId, project.nativeProjectId, ...project.roots].map(matchKey);
 const byRecent = (a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0);
 const activeFirst = (a, b) => Number(b.status === 'active') - Number(a.status === 'active');
-const coordinationIntro = `Antigravity now coordinates requirements and milestone acceptance for this original Codex chat. Keep your current project rules, model, technical ownership and any existing DSH session and listeners. Report meaningful milestones, blockers, writing handoffs or roadmap decisions. To report explicitly from Windows, send the paragraph via stdin to ${scriptCommand('daily.mjs')} feedback --native-output REPORT_ID --text KIND. Continue all previously authorized work.`;
+const coordinationIntro = [
+  'Antigravity now coordinates requirements and reviews direction for this original Codex chat. Keep your project rules, model, technical ownership and any existing DSH session and listeners.',
+  `Report progress proactively at a cadence suited to the task. ${milestoneCadence} Combine the last milestone with the final report when they overlap.`,
+  `${milestoneContinuation} Continue all previously authorized work without waiting for milestone acknowledgment. When only a real dependency remains, keep the original native wait if available. End the turn only when the full authorized task is complete, the user asks to pause or stop, or a real blocker leaves no useful authorized work or native wait.`,
+  'Gemini checks the agreed roadmap and evidence, explains each milestone in plain language for the user, and contacts you about it only for major drift or an evidence-backed improvement to the next step.',
+  `Report material blockers, writing handoffs and roadmap decisions as appropriate. To report explicitly from Windows, send the paragraph via stdin to ${scriptCommand('daily.mjs')} feedback --native-output REPORT_ID --text KIND.`
+].join('\n');
 
 export class DailyBridge extends Bridge {
-  constructor(store, { endpoint = existingSharedEndpoint, desktopFile = join(homedir(), '.codex/.codex-global-state.json') } = {}) {
+  constructor(store, { connection = existingSharedConnection, desktopFile = join(homedir(), '.codex/.codex-global-state.json') } = {}) {
     super(store, { projectFile: null });
-    this.connectEndpoint = endpoint;
+    this.connectDesktop = connection;
     this.desktopFile = desktopFile;
     this.desktop = new DesktopDelivery(store, true);
     this.agyWatch = new DailyWatch(store);
@@ -80,10 +87,11 @@ export class DailyBridge extends Bridge {
   async connectDaily() {
     if (this.codex.info && this.codex.endpoint) return;
     if (!this.connecting) this.connecting = (async () => {
-      const endpoint = await this.connectEndpoint();
+      const { endpoint, desktopTransport } = await this.connectDesktop();
       if (this.closed) throw new Error('The daily bridge has stopped.');
       const client = this.codexClient(endpoint);
       this.codex = client;
+      this.desktopTransport = desktopTransport;
       await client.connect();
       this.reconnectDelay = 1000;
     })().finally(() => { this.connecting = null; });
@@ -91,8 +99,9 @@ export class DailyBridge extends Bridge {
   }
 
   async rpc(method, params) {
-    await this.connectDaily();
-    return super.rpc(method, params);
+    try { await this.connectDaily(); }
+    catch (error) { throw new NativeRequestNotSentError(error.message, { cause: error }); }
+    return this.codex.request(method, params);
   }
 
   desktopState() {
@@ -252,8 +261,9 @@ export class DailyBridge extends Bridge {
 
   async reconcileDaily(threadId) {
     const queued = this.store.all('SELECT * FROM daily_queue WHERE thread=? AND turn IS NULL', threadId);
-    const tracked = this.store.all("SELECT id FROM turns WHERE thread=? AND status IN ('inProgress','uncertain')", threadId);
-    if (!queued.length && !tracked.length) {
+    const tracked = new Set(this.store.all("SELECT id FROM turns WHERE thread=? AND status IN ('inProgress','uncertain')", threadId)
+      .map(row => row.id));
+    if (!queued.length && !tracked.size) {
       this.feedbackWatches.get(threadId)?.close();
       this.feedbackWatches.delete(threadId);
       return;
@@ -269,14 +279,28 @@ export class DailyBridge extends Bridge {
           this.agyWatch.route(threadId, turn.id, request.conversation);
           this.recordTurn(threadId, turn.id, 'inProgress');
         });
+        tracked.add(turn.id);
         this.store.emit('daily-dispatch', request.id);
       }
     }
     const watcher = await this.followNativeFeedback(threadId);
     await watcher?.refresh();
     if (this.closed) return;
-    for (const turn of data) {
-      if (!this.hasRoute(threadId, turn.id)) continue;
+    let confirmedInterruptions;
+    // Persisted history can show an unfinished live turn as interrupted during startup.
+    // Wait for native events while the chat is active, then read history again after it settles.
+    if (data.some(turn => tracked.has(turn.id) && turn.status === 'interrupted')) {
+      const { status } = await this.nativeThread(threadId);
+      if (status.type !== 'active') {
+        const latest = await this.history(threadId, { limit: 20 });
+        confirmedInterruptions = new Map(latest.data.map(turn => [turn.id, turn]));
+      }
+    }
+    if (this.closed) return;
+    for (const recorded of data) {
+      if (!tracked.has(recorded.id) || !this.hasRoute(threadId, recorded.id)) continue;
+      const turn = recorded.status === 'interrupted' ? confirmedInterruptions?.get(recorded.id) : recorded;
+      if (!turn) continue;
       if (terminal.has(turn.status)) {
         this.store.run("UPDATE turns SET status='uncertain' WHERE thread=? AND id=? AND status='inProgress'", threadId, turn.id);
         this.complete(threadId, turn, true);
@@ -346,7 +370,7 @@ export class DailyBridge extends Bridge {
       this.schedule(threadId);
       return { threadId, after, accepted: false, state: 'queued', queueId: queuedSubmission.id, delivery };
     } catch (error) {
-      if (error.code === 'CODEX_RPC_ERROR') this.store.transaction(() => {
+      if (error.code === 'CODEX_RPC_ERROR' || error instanceof NativeRequestNotSentError) this.store.transaction(() => {
         this.store.run('DELETE FROM daily_queue WHERE id=?', requestId);
         if (decisionEventId) this.store.run('DELETE FROM resolutions WHERE event=? AND action=?', decisionEventId, requestId);
       });
@@ -458,7 +482,8 @@ export class DailyBridge extends Bridge {
       case 'agy_message_status': return this.messageStatus(args.requestId);
       case 'bridge_status':
         await this.connectDaily();
-        return { backend: 'existing_shared_codex_desktop', scope: 'all_local_codex_for_antigravity', ready: true, defaultDelivery: 'direct' };
+        return { backend: 'existing_shared_codex_desktop', desktopTransport: this.desktopTransport,
+          scope: 'all_local_codex_for_antigravity', ready: true, defaultDelivery: 'direct' };
       case 'codex_list_projects': {
         const term = matchKey(args.searchTerm);
         const projects = (await this.projectCatalog()).filter(project => projectKeys(project).some(value => value.includes(term)));
@@ -476,7 +501,10 @@ export class DailyBridge extends Bridge {
         await this.nativeThread(threadId);
         return this.rpc('thread/items/list', { threadId, turnId: args.turnId, cursor: args.cursor, limit: args.limit ?? 10 });
       case 'codex_attach_thread': return this.action(name, args, () => this.attach(args));
-      case 'codex_send_message': return this.action(name, args, () => this.serial(threadId, () => this.sendDailyMessage(args)));
+      case 'codex_send_message':
+        // The queue row is committed before any native send. No row means an old started action is safe to retry.
+        return this.action(name, args, () => this.serial(threadId, () => this.sendDailyMessage(args)),
+          () => !this.store.get('SELECT 1 FROM daily_queue WHERE id = ?', args.requestId));
       case 'codex_wait_dispatch': {
         const status = () => {
           const row = this.store.get('SELECT * FROM daily_queue WHERE id=?', args.requestId);
