@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex 回执</title>
+<style>
+  body { margin: 0; padding: 18px; font: 14px/1.6 var(--font-sans, system-ui); color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
+  h1 { margin: 0 0 12px; font-size: 18px; }
+  label { display: block; margin-bottom: 4px; }
+  select, button { font: inherit; max-width: 100%; color: inherit; background: inherit; border: 1px solid var(--color-border-primary, GrayText); border-radius: 6px; padding: 4px 9px; }
+  article { border-top: 1px solid var(--color-border-primary, GrayText); padding: 10px 0; }
+  article p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  small { opacity: .75; }
+</style>
+<h1>Codex 回执</h1>
+<label for="thread">协作会话</label>
+<select id="thread"><option value="">选择会话</option></select>
+<button id="stop" type="button" disabled>停止实时更新</button>
+<p id="status" role="status">连接中…</p>
+<section id="events" aria-label="回执"></section>
+<script type="module">
+  const thread = document.querySelector('#thread');
+  const status = document.querySelector('#status');
+  const stop = document.querySelector('#stop');
+  const events = document.querySelector('#events');
+  const pending = new Map();
+  let id = 0;
+  let watching;
+  let initialized = false;
+  let chosenByTool;
+  const labels = { milestone: '阶段成果', writing_request: '写作交接', decision: '路线决策', blocker: '阻塞', final: '最终交付', turn_fallback: '原生回合结果', turn_error: '回合异常', transport_error: '事件连接中断' };
+  const post = message => parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+  const notify = (method, params = {}) => post({ method, params });
+
+  function request(method, params, signal) {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const requestId = ++id;
+      const abort = () => {
+        pending.delete(requestId);
+        notify('notifications/cancelled', { requestId, reason: 'Inbox view changed' });
+        reject(signal.reason);
+      };
+      const finish = (callback, value) => { signal?.removeEventListener('abort', abort); callback(value); };
+      signal?.addEventListener('abort', abort, { once: true });
+      pending.set(requestId, { resolve: value => finish(resolve, value), reject: error => finish(reject, error) });
+      post({ id: requestId, method, params });
+    });
+  }
+
+  window.addEventListener('message', event => {
+    if (event.source !== parent || event.data?.jsonrpc !== '2.0') return;
+    const message = event.data;
+    if (!message.method && pending.has(message.id)) {
+      const entry = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) entry.reject(new Error(message.error.message));
+      else entry.resolve(message.result);
+    }
+    if (message.method === 'ui/notifications/tool-result') {
+      const target = message.params?.structuredContent?.thread?.threadId;
+      if (target) chosenByTool = target;
+      if (initialized && target && Array.from(thread.options).some(option => option.value === target) && thread.value !== target) {
+        thread.value = target;
+        load();
+      }
+    }
+  });
+
+  async function call(name, args, signal) {
+    const response = await request('tools/call', { name, arguments: args }, signal);
+    const value = response.structuredContent ?? JSON.parse(response.content[0].text);
+    if (!value.ok) throw new Error(value.message ?? value.code);
+    return value;
+  }
+
+  function render(event) {
+    if (events.querySelector(`[data-event="${event.eventId}"]`)) return;
+    const article = document.createElement('article');
+    article.dataset.event = event.eventId;
+    const heading = document.createElement('strong');
+    heading.textContent = `${labels[event.kind] ?? event.kind} · #${event.eventId}`;
+    article.append(heading);
+    const timestamp = document.createElement('div');
+    const small = document.createElement('small');
+    small.textContent = new Date(event.at).toLocaleString('zh-CN');
+    timestamp.append(small);
+    article.append(timestamp);
+    for (const value of [event.summary, event.notice, event.finalOutput, event.error, event.evidence,
+      event.options?.join('\n'), event.recommendation, event.impact, event.artifacts?.join('\n')]) {
+      if (!value) continue;
+      const line = document.createElement('p');
+      line.textContent = value;
+      article.append(line);
+    }
+    events.prepend(article);
+    while (events.children.length > 50) events.lastElementChild.remove();
+  }
+
+  async function load() {
+    watching?.abort();
+    events.replaceChildren();
+    const threadId = thread.value;
+    stop.disabled = !threadId;
+    if (!threadId) { status.textContent = '选择会话查看回执。'; return; }
+    const current = new AbortController();
+    watching = current;
+    status.textContent = '加载已保存的回执…';
+    try {
+      const snapshot = await call('codex_inbox', { threadId }, current.signal);
+      snapshot.events.forEach(render);
+      let after = snapshot.nextCursor;
+      status.textContent = '正在接收新回执。';
+      while (!current.signal.aborted) {
+        const result = await call('codex_panel_wait', { threadIds: [threadId], after }, current.signal);
+        render(result.event);
+        after = result.nextCursor;
+      }
+    } catch (error) {
+      if (!current.signal.aborted) { status.textContent = `连接已结束。${error.message}`; stop.disabled = true; }
+    }
+  }
+
+  thread.addEventListener('change', load);
+  stop.addEventListener('click', () => {
+    watching?.abort();
+    status.textContent = '实时更新已停止。重新选择会话可恢复。';
+    stop.disabled = true;
+  });
+  window.addEventListener('pagehide', () => watching?.abort());
+  try {
+    await request('ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: 'Codex 回执', version: '0.1.0' }, appCapabilities: {} });
+    notify('ui/notifications/initialized');
+    const result = await call('codex_inbox', {});
+    for (const item of result.threads) thread.add(new Option(`${item.title} · ${item.workspaceId}`, item.threadId));
+    initialized = true;
+    status.textContent = result.threads.length ? '选择会话查看回执。' : '还没有桥接会话。';
+    if (chosenByTool && result.threads.some(item => item.threadId === chosenByTool)) { thread.value = chosenByTool; load(); }
+  } catch (error) { status.textContent = `回执面板未能连接。${error.message}`; }
+</script>
+</html>

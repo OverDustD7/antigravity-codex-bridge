@@ -1,0 +1,25 @@
+{
+  "codex-bridge-session": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node ./src/daily.mjs session",
+        "timeout": 10
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node ./src/daily.mjs session pre",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node ./src/daily.mjs session stop",
+        "timeout": 10
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "display_name": "Codex receipt notifications",
+  "description": "Deliver pending receipts to their bound Antigravity conversation.",
+  "command": "node",
+  "args": [
+    "../../src/daily.mjs",
+    "sidecar"
+  ],
+  "restart_policy": "always"
+}

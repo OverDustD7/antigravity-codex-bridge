@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "coordinator": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/src/daily.mjs",
+        "mcp"
+      ],
+      "timeoutSeconds": -1,
+      "tools": {
+        "codex_list_projects": {
+          "eager": true
+        },
+        "codex_list_threads": {
+          "eager": true
+        },
+        "codex_read_thread": {
+          "eager": true
+        },
+        "codex_send_message": {
+          "eager": true
+        },
+        "codex_wait": {
+          "eager": true,
+          "background": "always"
+        },
+        "codex_wait_dispatch": {
+          "background": "always"
+        }
+      }
+    }
+  }
+}
