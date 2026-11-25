@@ -64,7 +64,7 @@ codex mcp list
 
 ### 可选的省额度开关
 
-在 GitHub 当前源码的根目录打开 PowerShell。依次对应开启、查看当前设置和恢复常规投递。新安装默认使用常规模式，设置作用于本机日常桥，重启后保留。
+在 v0.2.1 解压目录或源码根目录打开 PowerShell。以下三条命令分别用于开启、查看当前设置和恢复常规投递。新安装默认使用常规模式，设置作用于本机日常桥，重启后保留。
 
 ```powershell
 '{"mode":"direction_only"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
@@ -72,7 +72,7 @@ node .\src\daily.mjs control bridge_reporting_mode
 '{"mode":"normal"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
 ```
 
-省额度模式把例行更新留在收件箱，回合结束、明确索要的答复和标记过的路线纠偏仍投递到原会话。恢复常规模式后，新产生的例行更新照常投递。该开关晚于 v0.2.0 Windows ZIP。
+省额度模式把例行更新留在收件箱，回合结束、明确索要的答复和标记过的路线纠偏仍投递到原会话。恢复常规模式后，新产生的例行更新照常投递。
 
 ### 可选的闲置会话推送
 

@@ -64,7 +64,7 @@ The bridge delivers one receipt when each watched Codex turn ends, including tur
 
 ### Optional quota-saving mode
 
-In a checkout of the current GitHub source, open PowerShell in the repository root. Run the first command to enable quota saving, the second to check the setting, and the third to return to normal delivery. New installations start in normal mode. The setting applies to the local daily bridge and persists across restarts.
+Open PowerShell in the extracted v0.2.1 folder or the source repository root. Run the first command to enable quota saving, the second to check the setting, and the third to return to normal delivery. New installations start in normal mode. The setting applies to the local daily bridge and persists across restarts.
 
 ```powershell
 '{"mode":"direction_only"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
@@ -72,7 +72,7 @@ node .\src\daily.mjs control bridge_reporting_mode
 '{"mode":"normal"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
 ```
 
-In quota-saving mode, routine updates remain in the inbox for manual reading. Watched turn endings, replies you explicitly requested, and marked course corrections still reach their original chats. Re-enabling routine delivery applies to new updates. The tagged v0.2.0 Windows ZIP predates this switch.
+In quota-saving mode, routine updates remain in the inbox for manual reading. Watched turn endings, replies you explicitly requested, and marked course corrections still reach their original chats. Re-enabling routine delivery applies to new updates.
 
 ### Optional delivery to idle chats
 

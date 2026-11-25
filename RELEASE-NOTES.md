@@ -1,18 +1,18 @@
-# Antigravity–Codex Bridge v0.2.0 (Windows Preview)
+# Antigravity–Codex Bridge v0.2.1 (Windows Preview)
 
-Use Antigravity to find existing Codex desktop chats, send work to them, and receive progress or final output in the originating Antigravity conversation. After one-time setup, open Codex from its usual Windows icon. The bridge shares the App Server started by the official desktop app and keeps the desktop's native tool connection. The ZIP includes the Antigravity plugin, the Windows setup, the feedback script, and the optional Codex MCP server.
+This preview adds an optional quota-saving switch and improves reply delivery from Codex to Antigravity. New installations use normal reporting. The switch is documented in both READMEs and stays set across bridge restarts.
 
 ## Changes
 
-- Install the Windows adapter once, then start Codex from its official icon. The desktop's native tools and the bridge share its App Server. The setup script supports Windows PowerShell.
-- Keep Antigravity waiting quietly while Codex is offline. The bridge resumes from the saved cursor and wakes the relevant chat for a real receipt. Connection diagnostics remain available in the inbox.
-- Retry confirmed unsent messages with the same request ID and arguments. A submitted message without a native acknowledgment remains protected against duplicate dispatch.
-- Keep Codex working after a milestone report. Gemini reviews the roadmap, explains progress in plain language, and contacts the original Codex chat for major drift or a better next step supported by evidence.
+- Deliver one receipt for each confirmed end of a watched Codex turn, even when that turn already sent a progress report. Antigravity uses the original task to decide whether work should continue.
+- Send explicitly requested reports to the originating Antigravity chat. Quota-saving mode keeps routine progress in the inbox while turn endings, requested reports, and marked course corrections still arrive.
+- Find chats in native Codex projects by their exact working directory when the app has no recorded assignment. Explicit assignments and archive filters still apply.
+- Use the registered Windows app identity when the bridge launches the official Codex desktop app.
 
-## Install and verify
+## Install or upgrade
 
-Download the Windows ZIP and its SHA-256 file from Assets. Extract the ZIP and follow the English or Chinese README. The preview requires Windows, Node.js 24 or later, and the two official desktop clients. Users of the v0.1.1 launcher should follow the upgrade steps before installing the adapter.
+Download the v0.2.1 Windows ZIP and its SHA-256 file from Assets. Verify the checksum and follow the upgrade steps in the English or Chinese README. The preview requires Windows, Node.js 24 or later, and the official Codex and Antigravity clients.
 
-The ordinary Codex launch path was verified on an existing Windows setup. The package was checked with strict Antigravity validation and isolated plugin installation, upgrade, removal, and receipt tests. Full desktop installation on a fresh Windows account remains unverified. Background watches resume when the original Antigravity conversation runs again after reopening Antigravity. Use the optional Sidecar for delivery to an idle chat.
+The portable bundle was tested with an isolated Antigravity installation, including enabling and disabling quota saving. A local App Server with a deterministic test provider verified turn-ending receipts. A separate bridge test verified requested-reply routing. Full desktop installation on a fresh Windows account remains unverified.
 
 The bridge's original code and documentation are MIT-licensed. Codex, Antigravity, and Node.js are installed separately under their own terms.
