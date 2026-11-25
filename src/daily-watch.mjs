@@ -1,5 +1,5 @@
 import { BridgeError } from './protocol.mjs';
-import { receiptWakeFilter } from './store.mjs';
+import { dailyReceiptWakeFilter, dailyReplyTarget } from './store.mjs';
 
 export class DailyWatch {
   constructor(store) {
@@ -77,10 +77,11 @@ export class DailyWatch {
     this.active.set(key, controller);
     try {
       return await this.store.onUpdate('event', () => {
-        const row = this.store.get(`SELECT e.* FROM events e WHERE e.thread=? AND e.seq>? AND ${receiptWakeFilter} AND (
-          EXISTS (SELECT 1 FROM daily_routes r WHERE r.thread=e.thread AND r.turn=e.turn AND r.conversation=?) OR
+        const row = this.store.get(`SELECT e.* FROM events e WHERE e.thread=? AND e.seq>? AND ${dailyReceiptWakeFilter} AND (
+          (EXISTS (SELECT 1 FROM daily_routes r WHERE r.thread=e.thread AND r.turn=e.turn AND r.conversation=?)
+            AND (${dailyReplyTarget} IS NULL OR ${dailyReplyTarget}=?)) OR
           EXISTS (SELECT 1 FROM daily_messages m WHERE m.event=e.seq AND m.conversation=? AND m.path='background_wait')
-        ) ORDER BY e.seq LIMIT 1`, threadId, cursor, conversationId, conversationId);
+        ) ORDER BY e.seq LIMIT 1`, threadId, cursor, conversationId, conversationId, conversationId);
         return row && { event: this.store.eventRecord(row), nextCursor: row.seq };
       }, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, id => !id || id === threadId);
     } finally { this.active.delete(key); }

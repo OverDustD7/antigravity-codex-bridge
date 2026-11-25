@@ -30,6 +30,21 @@ async function launchDesktop(executable, env, args) {
   desktop.unref();
 }
 
+async function launchRegisteredDesktop(threadId) {
+  const command = threadId
+    ? 'Start-Process -FilePath $env:AGY_BRIDGE_CODEX_URI -ErrorAction Stop'
+    : [
+        '$package = Get-AppxPackage -Name OpenAI.Codex | Select-Object -First 1',
+        "if (-not $package) { throw 'The official ChatGPT desktop package is not installed.' }",
+        '$appId = $package.PackageFamilyName + "!App"',
+        String.raw`Start-Process -FilePath explorer.exe -ArgumentList ("shell:AppsFolder\" + $appId) -ErrorAction Stop`
+      ].join('; ');
+  await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    env: threadId ? { ...process.env, AGY_BRIDGE_CODEX_URI: `codex://threads/${threadId}` } : process.env,
+    windowsHide: true
+  });
+}
+
 try {
   if (action === 'stop' && !threadId) {
     const result = await invoke('desktop_shared_stop', {});
@@ -40,17 +55,17 @@ try {
     if (!result.ok) throw new Error(result.message ?? result.code);
     console.log(JSON.stringify(result));
   } else if ((action === 'open' && validThread) || (action === 'startup' && !threadId)) {
+    if (existsSync(nativeDesktopSelection)) {
+      const { adapter } = JSON.parse(readFileSync(nativeDesktopSelection, 'utf8'));
+      if (!isAbsolute(adapter ?? '') || !existsSync(adapter)) throw new Error('The registered Codex desktop adapter is missing. Reinstall or remove it.');
+      await launchRegisteredDesktop(threadId);
+      console.log(JSON.stringify({ ok: true, state: 'normal_desktop_launch', ...(threadId && { threadId }) }));
+      process.exit(0);
+    }
     const executable = await desktopExecutable();
     const env = { ...process.env };
     for (const name of Object.keys(env)) if (name.startsWith('CODEX_') || name === 'OPENAI_API_KEY') delete env[name];
     const args = threadId ? [`codex://threads/${threadId}`] : [];
-    if (existsSync(nativeDesktopSelection)) {
-      const { adapter } = JSON.parse(readFileSync(nativeDesktopSelection, 'utf8'));
-      if (!isAbsolute(adapter ?? '') || !existsSync(adapter)) throw new Error('The registered Codex desktop adapter is missing. Reinstall or remove it.');
-      await launchDesktop(executable, { ...env, CODEX_CLI_PATH: adapter }, args);
-      console.log(JSON.stringify({ ok: true, state: 'normal_desktop_launch', ...(threadId && { threadId }) }));
-      process.exit(0);
-    }
     const running = await existingDesktopIsRunning(executable);
     if (running) {
       const status = await invoke('desktop_shared_status', {});

@@ -557,7 +557,7 @@ export class Bridge {
     }
   }
 
-  complete(threadId, turn, recovered = false) {
+  complete(threadId, turn, recovered = false, nativeEndObserved = false) {
     if (!finalPhases.has(turn.status)) return;
     this.store.transaction(() => {
       const row = this.store.get('SELECT * FROM turns WHERE thread = ? AND id = ?', threadId, turn.id);
@@ -569,13 +569,18 @@ export class Bridge {
       const text = lastFinal(turn.items) ?? row?.final_text ?? null;
       this.store.run('UPDATE turns SET status = ?, final_text = ? WHERE thread = ? AND id = ?', turn.status, text, threadId, turn.id);
       const activeReport = !!this.store.get("SELECT 1 AS found FROM events WHERE thread = ? AND turn = ? AND key LIKE 'report:%'", threadId, turn.id);
-      if (!activeReport || turn.status !== 'completed') {
+      if (this.alwaysReportTurnEnd || !activeReport || turn.status !== 'completed') {
         // An empty interruption inferred after disconnect is diagnostic, not a new receipt.
-        const offlineInterruption = recovered && turn.status === 'interrupted' && !text && !turn.error &&
+        const offlineInterruption = recovered && !nativeEndObserved && turn.completedAt == null && turn.status === 'interrupted' && !text && !turn.error &&
           this.store.get('SELECT 1 FROM events WHERE thread = ? AND key = ?', threadId, `lost:${turn.id}`);
-        this.store.event(threadId, turn.id, `closed:${turn.id}`, activeReport ? 'turn_error' : 'turn_fallback', {
+        const kind = !activeReport ? 'turn_fallback' : turn.status === 'completed' ? 'turn_completed' : 'turn_error';
+        const notice = turn.status === 'completed'
+          ? (activeReport ? 'Codex 本回合已结束。请按原任务核对是否还有待办。' : 'Codex 本回合已结束，未调用反馈工具。以下为原生最终输出。')
+          : 'Codex 本回合未正常完成。请按原任务核对是否需要接续。';
+        this.store.event(threadId, turn.id, `closed:${turn.id}`, kind, {
           source: 'codex_native_turn', activeReport, status: turn.status, finalOutput: shorten(text),
-          notice: activeReport ? 'Codex 主动报告后，本轮异常结束。' : 'Codex 本轮未调用反馈工具。以下为原生回合最终输出。',
+          notice,
+          ...(this.alwaysReportTurnEnd ? { dailyTurnEnd: true } : {}),
           ...(turn.error ? { error: shorten(turn.error.message, 1000) } : {}), ...(recovered ? { recovered } : {}),
           ...(offlineInterruption ? { silent: true } : {})
         });

@@ -60,6 +60,22 @@ This plugin can read, send to, and manage local Codex chats available to your de
 
 `codex_wait` keeps the original wait and cursor while Codex is offline or the bridge restarts. A real receipt wakes its target chat. Disconnect diagnostics are available in the inbox. After you quit and reopen Antigravity itself, ordinary watches are restored when the original Antigravity conversation runs again.
 
+The bridge delivers one receipt when each watched Codex turn ends, including turns that already sent a progress report. Antigravity checks the original task before it sends more work. If the task is complete, it summarizes the result and stops that watch. When you explicitly ask for a reply during a turn, Antigravity can set `expectReport: true` and the response goes to the requesting chat.
+
+### Optional quota-saving mode
+
+In a checkout of the current GitHub source, open PowerShell in the repository root. Run the first command to enable quota saving, the second to check the setting, and the third to return to normal delivery. New installations start in normal mode. The setting applies to the local daily bridge and persists across restarts.
+
+```powershell
+'{"mode":"direction_only"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
+node .\src\daily.mjs control bridge_reporting_mode
+'{"mode":"normal"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
+```
+
+In quota-saving mode, routine updates remain in the inbox for manual reading. Watched turn endings, replies you explicitly requested, and marked course corrections still reach their original chats. Re-enabling routine delivery applies to new updates. The tagged v0.2.0 Windows ZIP predates this switch.
+
+### Optional delivery to idle chats
+
 For automatic delivery to an idle chat after reopening Antigravity, enable the optional Sidecar in the Antigravity user configuration and bind that chat pair with `codex_bind_desktop`. Merge the following entry into `~/.gemini/config/config.json` under the existing `sidecars` object, keeping its other entries. The bind requires the originating Antigravity conversation, the Codex chat ID, and its latest confirmed receipt cursor. Use one receipt delivery path per pair. [Antigravity Sidecars](https://antigravity.google/docs/sidecars/)
 
 ```json

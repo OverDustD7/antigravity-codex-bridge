@@ -60,6 +60,22 @@ codex mcp list
 
 `codex_wait` 在后台等事件。Codex 离线或桥后台重启时，原等待沿保存的游标静默续接，实际回执才唤醒对应会话。断连记录留在收件箱供主动查看。退出并重开 Antigravity 后，普通监听在原 Antigravity 会话再次运行时续接。
 
+每个已监听的 Codex 回合结束后都会发一次回执，即使回合中已经报过进度。Antigravity 收到后查原任务，有已授权的待办才接续。任务完成后汇总结果并停止对应等待。你明确要求在回合中答复时，Antigravity 可用 `expectReport: true` 登记，回执会送到发起的会话。
+
+### 可选的省额度开关
+
+在 GitHub 当前源码的根目录打开 PowerShell。依次对应开启、查看当前设置和恢复常规投递。新安装默认使用常规模式，设置作用于本机日常桥，重启后保留。
+
+```powershell
+'{"mode":"direction_only"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
+node .\src\daily.mjs control bridge_reporting_mode
+'{"mode":"normal"}' | node .\src\daily.mjs control bridge_reporting_mode --stdin
+```
+
+省额度模式把例行更新留在收件箱，回合结束、明确索要的答复和标记过的路线纠偏仍投递到原会话。恢复常规模式后，新产生的例行更新照常投递。该开关晚于 v0.2.0 Windows ZIP。
+
+### 可选的闲置会话推送
+
 如需重开 Antigravity 后自动向闲置原聊天推送回执，可启用 Sidecar 并用 `codex_bind_desktop` 绑定原 Antigravity 会话、Codex 原聊天及最后确认的游标。把下面的条目合并到 `~/.gemini/config/config.json` 的 `sidecars`，保留已有条目。同一对聊天保留一种回执投递方式。 [Sidecar 配置文档](https://antigravity.google/docs/sidecars/)
 
 ```json

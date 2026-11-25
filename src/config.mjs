@@ -16,7 +16,7 @@ export const workspaces = resolve(process.env.BRIDGE_WORKSPACES ?? join(portable
 export const codexHome = join(runtime, 'codex-home');
 export const sharedProjectFile = join(runtime, 'shared-codex-project.json');
 export const allowIsolatedDispatch = process.env.BRIDGE_ALLOW_ISOLATED_DISPATCH === '1';
-export const runtimeProtocol = daily ? 12 : 3;
+export const runtimeProtocol = daily ? 17 : 3;
 export const pipeFor = directory => process.platform === 'win32'
   ? `\\\\.\\pipe\\agy-codex-${createHash('sha256').update(directory.toLowerCase()).digest('hex').slice(0, 24)}`
   : join(directory, 'bridge.sock');

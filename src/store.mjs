@@ -2,6 +2,14 @@ import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 
 export const receiptWakeFilter = "kind <> 'transport_error' AND coalesce(json_extract(body, '$.silent'), 0) = 0";
+export const dailyReplyTarget = `(SELECT q.conversation FROM daily_queue q JOIN daily_report_requests r ON r.request=q.id
+  WHERE q.id=json_extract(e.body,'$.replyToRequestId') AND q.thread=e.thread AND q.turn=e.turn)`;
+export const dailyReceiptWakeFilter = `${receiptWakeFilter} AND (
+  (kind IN ('decision', 'agy_message') AND json_extract(body, '$.attention') = 'course_correction')
+  OR (kind IN ('turn_completed', 'turn_fallback', 'turn_error') AND json_extract(body, '$.dailyTurnEnd') = 1)
+  OR ${dailyReplyTarget} IS NOT NULL
+  OR NOT EXISTS (SELECT 1 FROM daily_reporting WHERE direction_only = 1 OR seq <= manual_through)
+)`;
 
 export class Store extends EventEmitter {
   constructor(path) {
@@ -40,6 +48,9 @@ export class Store extends EventEmitter {
       CREATE INDEX IF NOT EXISTS agy_watch_by_conversation ON agy_receipt_watches (conversation, enabled);
       CREATE TABLE IF NOT EXISTS push_targets (thread TEXT PRIMARY KEY, conversation TEXT NOT NULL, cursor INTEGER NOT NULL, enabled INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS push_deliveries (event INTEGER PRIMARY KEY, conversation TEXT NOT NULL, state TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS daily_reporting (
+        id INTEGER PRIMARY KEY CHECK (id=1), direction_only INTEGER NOT NULL, manual_through INTEGER NOT NULL
+      );
     `);
   }
 
@@ -62,17 +73,35 @@ export class Store extends EventEmitter {
     return { eventId: row.seq, threadId: row.thread, turnId: row.turn, kind: row.kind, at: row.at, ...JSON.parse(row.body) };
   }
 
-  events(threads, after, limit, notificationsOnly = false) {
-    return this.all(`SELECT * FROM events WHERE seq > ? AND thread IN (${threads.map(() => '?').join(',')})
-      ${notificationsOnly ? `AND ${receiptWakeFilter}` : ''} ORDER BY seq LIMIT ?`,
+  events(threads, after, limit, wakeFilter = '') {
+    return this.all(`SELECT e.* FROM events e WHERE seq > ? AND thread IN (${threads.map(() => '?').join(',')})
+      ${wakeFilter ? `AND ${wakeFilter}` : ''} ORDER BY seq LIMIT ?`,
       after, ...threads, limit).map(row => this.eventRecord(row));
   }
 
-  wait(threads, after, signal) {
+  wait(threads, after, signal, wakeFilter = receiptWakeFilter) {
     return this.onUpdate('event', () => {
-      const event = this.events(threads, after, 1, true)[0];
+      const event = this.events(threads, after, 1, wakeFilter)[0];
       return event && { event, nextCursor: event.eventId };
     }, signal, thread => !thread || threads.includes(thread));
+  }
+
+  reportingMode() {
+    return this.get('SELECT direction_only FROM daily_reporting WHERE id=1')?.direction_only ? 'direction_only' : 'normal';
+  }
+
+  setReportingMode(mode) {
+    const directionOnly = mode === 'direction_only' ? 1 : 0;
+    this.transaction(() => {
+      if (mode === this.reportingMode()) return;
+      this.run(`INSERT INTO daily_reporting (id,direction_only,manual_through)
+        VALUES (1,?,(SELECT coalesce(max(seq),0) FROM events))
+        ON CONFLICT (id) DO UPDATE SET direction_only=excluded.direction_only,manual_through=excluded.manual_through`, directionOnly);
+      // Reserved notices are still local. Claimed notices may already have reached Antigravity.
+      this.run(`UPDATE push_deliveries SET state='skipped' WHERE state IN ('reserved','retry')
+        AND event IN (SELECT seq FROM events e WHERE NOT coalesce((${dailyReceiptWakeFilter}), 0))`);
+    });
+    return this.reportingMode();
   }
 
   onUpdate(channel, read, signal, matches = () => true) {

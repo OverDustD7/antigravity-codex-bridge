@@ -29,12 +29,14 @@ try {
     const result = await request('agy_register_session', { conversationId, workspacePaths });
     const status = result.ok ? await request('agy_watch_status', { conversationId }) : {};
     const missing = (status.watches ?? []).filter(watch => !watch.waiting);
-    if (daily && process.argv[2] === 'pre' && result.ok && !result.created && !missing.length) {
+    const directionOnly = status.reportingMode === 'direction_only';
+    if (daily && process.argv[2] === 'pre' && result.ok && !result.created && !missing.length && !directionOnly) {
       console.log('{}');
       process.exit(0);
     }
     const systemMessage = result.ok ? [
       `当前 ${daily ? '日常协作' : '桥接项目'}的 Antigravity 会话编号为 ${conversationId}。派工与回执等待沿用这个编号。`,
+      ...(directionOnly ? ['省额度模式已开启。每个已确认的回合结束、用户明确索要的回执和需要及时纠偏的路线问题照常提示。其他进度留在收件箱。回合结束后结合原任务判断，有未完成的授权工作才接续 Codex。'] : []),
       ...missing.map(resume)
     ].join('\n') : '协作桥未能登记桌面会话。可使用后台等待与收件箱。';
     console.log(JSON.stringify({ injectSteps: [{ systemMessage: { systemMessage } }] }));

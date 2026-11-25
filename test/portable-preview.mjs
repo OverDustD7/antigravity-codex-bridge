@@ -105,6 +105,7 @@ try {
   started = true;
   const registration = await jsonInput('./src/daily.mjs', ['session'], { conversationId, workspacePaths: [] }, installedDir);
   assert.match(registration.injectSteps[0].systemMessage.systemMessage, new RegExp(conversationId));
+  assert.equal((await control('bridge_reporting_mode')).reportingMode, 'normal');
   const store = new Store(join(state, 'bridge-daily', 'bridge.sqlite'));
   try {
     store.run('INSERT INTO workspaces (id,cwd) VALUES (?,?)', 'preview-fixture', unpacked);
@@ -147,6 +148,20 @@ try {
     await waitForListener();
     const next = await control('agy_send_message', { conversationId, requestId: 'preview-fixture-second-receipt', text: 'FALLBACK_OK' });
     assert.match(await fallback, new RegExp(`FALLBACK_OK[\\s\\S]*nextCursor=${next.eventId}`));
+
+    assert.equal((await control('bridge_reporting_mode', { mode: 'direction_only' })).reportingMode, 'direction_only');
+    const quietWait = mcp.call('tools/call', {
+      name: 'codex_wait', arguments: { threadIds: [threadId], conversationId, after: next.eventId }
+    });
+    quietWait.catch(() => {});
+    await waitForListener();
+    const routine = await control('agy_send_message', { conversationId, requestId: 'preview-fixture-routine', text: 'ROUTINE' });
+    assert.equal(routine.state, 'retained_in_inbox');
+    const correction = (await codexMcp.call('tools/call', { name: 'agy_send_message', arguments: {
+      conversationId, requestId: 'preview-fixture-correction', text: 'CORRECTION', attention: 'course_correction'
+    } })).structuredContent;
+    assert.equal((await quietWait).structuredContent.event.eventId, correction.eventId);
+    assert.equal((await control('bridge_reporting_mode', { mode: 'normal' })).reportingMode, 'normal');
 
     await mcp.close();
     // Antigravity is closed in this scenario while the daily worker still runs.

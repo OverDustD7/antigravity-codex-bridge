@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Bridge } from './bridge.mjs';
 import { existingSharedConnection } from './client.mjs';
@@ -9,7 +9,8 @@ import { scriptCommand } from './config.mjs';
 import { DailyWatch } from './daily-watch.mjs';
 import { DesktopDelivery } from './desktop.mjs';
 import { watchNativeFeedback } from './native-feedback.mjs';
-import { agyMessagingTools, BridgeError, milestoneCadence, milestoneContinuation, tools, validate } from './protocol.mjs';
+import { agyMessagingTools, BridgeError, directionOnlyCadence, milestoneCadence, milestoneContinuation, tools, validate } from './protocol.mjs';
+import { dailyReceiptWakeFilter, dailyReplyTarget } from './store.mjs';
 
 const specs = new Map([...tools, ...agyMessagingTools].map(tool => [tool.name, tool.inputSchema]));
 const terminal = new Set(['completed', 'failed', 'interrupted']);
@@ -19,15 +20,21 @@ const clip = value => typeof value === 'string' ? value.slice(0, 10000) : '';
 const actionInput = text => [{ type: 'text', text, text_elements: [] }];
 const messageText = item => (item.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n');
 const matchKey = value => String(value ?? '').trim().replaceAll('\\', '/').toLowerCase();
+const cwdKey = directory => {
+  const path = resolve(directory);
+  return process.platform === 'win32' ? path.toLowerCase() : path;
+};
 const projectKeys = project => [project.name, project.projectId, project.nativeProjectId, ...project.roots].map(matchKey);
 const byRecent = (a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0);
 const activeFirst = (a, b) => Number(b.status === 'active') - Number(a.status === 'active');
-const coordinationIntro = [
+const coordinationIntro = directionOnly => [
   'Antigravity now coordinates requirements and reviews direction for this original Codex chat. Keep your project rules, model, technical ownership and any existing DSH session and listeners.',
-  `Report progress proactively at a cadence suited to the task. ${milestoneCadence} Combine the last milestone with the final report when they overlap.`,
+  directionOnly ? directionOnlyCadence : `${milestoneCadence} Combine the last milestone with the final report when they overlap.`,
   `${milestoneContinuation} Continue all previously authorized work without waiting for milestone acknowledgment. When only a real dependency remains, keep the original native wait if available. End the turn only when the full authorized task is complete, the user asks to pause or stop, or a real blocker leaves no useful authorized work or native wait.`,
   'Gemini checks the agreed roadmap and evidence, explains each milestone in plain language for the user, and contacts you about it only for major drift or an evidence-backed improvement to the next step.',
-  `Report material blockers, writing handoffs and roadmap decisions as appropriate. To report explicitly from Windows, send the paragraph via stdin to ${scriptCommand('daily.mjs')} feedback --native-output REPORT_ID --text KIND.`
+  directionOnly
+    ? `For a direction issue, pass JSON with kind "decision", attention "course_correction", and a summary to ${scriptCommand('daily.mjs')} feedback --native-output REPORT_ID --stdin, or set the same attention on agy_send_message. Ordinary receipts are available for manual reading.`
+    : `To report explicitly from Windows, send the paragraph via stdin to ${scriptCommand('daily.mjs')} feedback --native-output REPORT_ID --text KIND.`
 ].join('\n');
 
 export class DailyBridge extends Bridge {
@@ -37,14 +44,17 @@ export class DailyBridge extends Bridge {
     this.desktopFile = desktopFile;
     this.desktop = new DesktopDelivery(store, true);
     this.agyWatch = new DailyWatch(store);
+    this.alwaysReportTurnEnd = true;
     this.refreshing = new Set();
     this.dirty = new Set();
     this.feedbackWatches = new Map();
+    this.nativeEnds = new Map();
     this.reconnectDelay = 1000;
     store.db.exec(`CREATE TABLE IF NOT EXISTS daily_queue (
       id TEXT PRIMARY KEY, thread TEXT NOT NULL, conversation TEXT NOT NULL,
       marker TEXT NOT NULL, queue_id TEXT, turn TEXT, created_at TEXT NOT NULL
-    ); CREATE INDEX IF NOT EXISTS daily_queue_by_thread ON daily_queue(thread,turn);`);
+    ); CREATE INDEX IF NOT EXISTS daily_queue_by_thread ON daily_queue(thread,turn);
+    CREATE TABLE IF NOT EXISTS daily_report_requests (request TEXT PRIMARY KEY);`);
   }
 
   pendingThreads() {
@@ -149,12 +159,15 @@ export class DailyBridge extends Bridge {
     return matches[0];
   }
 
-  summarize(thread, state = this.desktopState(), projects = this.projects(state)) {
+  summarize(thread, state = this.desktopState(), projects = this.projects(state), projectContext) {
     const membership = state['thread-project-assignments']?.[thread.id];
     const project = thread.projectId ? projects.find(p => p.nativeProjectId === thread.projectId)
       : membership?.projectKind === 'local' ? projects.find(p => p.projectId === membership.projectId) : null;
+    const cwdProject = !thread.projectId && !membership && thread.cwd && isAbsolute(thread.cwd) && projectContext?.sidebarStatus === 'native_catalog' &&
+      projectContext.roots.some(root => cwdKey(root) === cwdKey(thread.cwd)) ? projectContext : null;
     return { threadId: thread.id, title: thread.name ?? null, cwd: thread.cwd, status: thread.status?.type,
-      workspaceId: project?.workspaceId ?? thread.projectId ?? null, projectId: project?.projectId ?? null,
+      workspaceId: project?.workspaceId ?? cwdProject?.workspaceId ?? thread.projectId ?? null,
+      projectId: project?.projectId ?? cwdProject?.projectId ?? null,
       nativeProjectId: thread.projectId ?? project?.nativeProjectId ?? null, archived: /[/\\]archived_sessions[/\\]/.test(thread.path ?? '') };
   }
 
@@ -212,6 +225,11 @@ export class DailyBridge extends Bridge {
     const threadId = args?.threadId;
     if (threadId && ['thread/status/changed', 'thread/queue/changed', 'turn/started', 'turn/completed'].includes(method) &&
       this.hasPendingWork(threadId)) {
+      if (method === 'turn/completed' && args.turn?.id && terminal.has(args.turn.status)) {
+        const ends = this.nativeEnds.get(threadId) ?? new Map();
+        ends.set(args.turn.id, args.turn);
+        this.nativeEnds.set(threadId, ends);
+      }
       this.schedule(threadId);
     }
     if (method !== 'turn/completed' && threadId && this.hasRoute(threadId, args.turn?.id ?? args.turnId ?? '')) {
@@ -264,6 +282,7 @@ export class DailyBridge extends Bridge {
     const tracked = new Set(this.store.all("SELECT id FROM turns WHERE thread=? AND status IN ('inProgress','uncertain')", threadId)
       .map(row => row.id));
     if (!queued.length && !tracked.size) {
+      this.nativeEnds.delete(threadId);
       this.feedbackWatches.get(threadId)?.close();
       this.feedbackWatches.delete(threadId);
       return;
@@ -281,15 +300,22 @@ export class DailyBridge extends Bridge {
         });
         tracked.add(turn.id);
         this.store.emit('daily-dispatch', request.id);
+        this.store.emit('event', threadId);
       }
     }
     const watcher = await this.followNativeFeedback(threadId);
     await watcher?.refresh();
     if (this.closed) return;
+    const ended = this.nativeEnds.get(threadId);
+    const knownTurns = new Map([...data].reverse().map(turn => [turn.id, turn]));
+    for (const [id, observed] of ended ?? []) {
+      const recorded = knownTurns.get(id);
+      knownTurns.set(id, { ...recorded, ...observed, items: recorded?.items?.length ? recorded.items : observed.items });
+    }
     let confirmedInterruptions;
     // Persisted history can show an unfinished live turn as interrupted during startup.
     // Wait for native events while the chat is active, then read history again after it settles.
-    if (data.some(turn => tracked.has(turn.id) && turn.status === 'interrupted')) {
+    if ([...knownTurns.values()].some(turn => tracked.has(turn.id) && turn.status === 'interrupted' && !ended?.has(turn.id))) {
       const { status } = await this.nativeThread(threadId);
       if (status.type !== 'active') {
         const latest = await this.history(threadId, { limit: 20 });
@@ -297,13 +323,15 @@ export class DailyBridge extends Bridge {
       }
     }
     if (this.closed) return;
-    for (const recorded of data) {
+    for (const recorded of knownTurns.values()) {
       if (!tracked.has(recorded.id) || !this.hasRoute(threadId, recorded.id)) continue;
-      const turn = recorded.status === 'interrupted' ? confirmedInterruptions?.get(recorded.id) : recorded;
+      const nativeEndObserved = !!ended?.has(recorded.id);
+      const turn = recorded.status === 'interrupted' && !nativeEndObserved ? confirmedInterruptions?.get(recorded.id) : recorded;
       if (!turn) continue;
       if (terminal.has(turn.status)) {
         this.store.run("UPDATE turns SET status='uncertain' WHERE thread=? AND id=? AND status='inProgress'", threadId, turn.id);
-        this.complete(threadId, turn, true);
+        this.complete(threadId, turn, true, nativeEndObserved);
+        ended?.delete(turn.id);
       } else if (turn.status === 'inProgress') {
         for (const item of turn.items ?? []) this.captureNativeFeedback(threadId, turn.id, item, true);
       }
@@ -312,10 +340,11 @@ export class DailyBridge extends Bridge {
       watcher.close();
       this.feedbackWatches.delete(threadId);
     }
+    if (!this.hasPendingWork(threadId)) this.nativeEnds.delete(threadId);
   }
 
   async sendDailyMessage(args) {
-    const { threadId, conversationId, requestId, decisionEventId } = args;
+    const { threadId, conversationId, requestId, decisionEventId, expectReport } = args;
     this.agyWatch.check(conversationId, threadId);
     const native = await this.nativeThread(threadId);
     const thread = this.track(native);
@@ -339,11 +368,16 @@ export class DailyBridge extends Bridge {
       ? `[Antigravity request ${createHash('sha256').update(requestId).digest('hex').slice(0, 20)}]`
       : '';
     const decision = decisionEventId ? `\nCoordinator reply to decision #${decisionEventId}. Apply the existing task authorization.` : '';
-    const input = actionInput(marker
-      ? `${marker}\n${coordinationIntro}${decision}\n\n${args.prompt}`
-      : args.prompt);
+    const report = expectReport
+      ? `The user explicitly requested a reply for ${JSON.stringify(requestId)}. When ready, send a single JSON receipt with kind, summary, and replyToRequestId set to that exact ID via ${scriptCommand('daily.mjs')} feedback --native-output REPORT_ID --stdin. It goes to the requesting Antigravity chat even in direction-only mode. Continue the authorized task after reporting.`
+      : '';
+    const input = actionInput([
+      marker && `${marker}\n${coordinationIntro(this.store.reportingMode() === 'direction_only')}${decision}`,
+      report, args.prompt
+    ].filter(Boolean).join('\n\n'));
     this.store.transaction(() => {
       this.store.run('INSERT INTO daily_queue (id,thread,conversation,marker,created_at) VALUES (?,?,?,?,?)', requestId, threadId, conversationId, marker, new Date().toISOString());
+      if (expectReport) this.store.run('INSERT INTO daily_report_requests VALUES (?)', requestId);
       if (decisionEventId) this.store.run('INSERT INTO resolutions (event,action) VALUES (?,?)', decisionEventId, requestId);
       this.agyWatch.expect(conversationId, threadId, after);
     });
@@ -361,6 +395,7 @@ export class DailyBridge extends Bridge {
           this.recordTurn(threadId, turnId, 'inProgress');
         });
         this.store.emit('daily-dispatch', requestId);
+        if (expectReport) this.store.emit('event', threadId);
         this.schedule(threadId);
         return { threadId, turnId, after, accepted: true, state: 'accepted', delivery };
       }
@@ -372,6 +407,7 @@ export class DailyBridge extends Bridge {
     } catch (error) {
       if (error.code === 'CODEX_RPC_ERROR' || error instanceof NativeRequestNotSentError) this.store.transaction(() => {
         this.store.run('DELETE FROM daily_queue WHERE id=?', requestId);
+        if (expectReport) this.store.run('DELETE FROM daily_report_requests WHERE request=?', requestId);
         if (decisionEventId) this.store.run('DELETE FROM resolutions WHERE event=? AND action=?', decisionEventId, requestId);
       });
       throw error;
@@ -382,6 +418,7 @@ export class DailyBridge extends Bridge {
     const state = this.desktopState();
     const projects = this.projects(state);
     const project = args.workspaceId ? await this.resolveProject(args.workspaceId, projects) : null;
+    if (project?.sidebarStatus === 'native_catalog') projects.push(project);
     if (args.activeOnly) return this.listActiveChats(args, state, projects, project);
     if (project) return this.listProjectChats(args, state, projects, project);
     const limit = args.limit ?? 25;
@@ -408,7 +445,7 @@ export class DailyBridge extends Bridge {
   async listActiveChats(args, state, projects, project) {
     const { data } = await this.rpc('thread/loaded/list', {});
     const matches = (await this.threadMetadata(data)).sort(byRecent)
-      .map(thread => this.summarize(thread, state, projects)).filter(thread => thread.status === 'active' &&
+      .map(thread => this.summarize(thread, state, projects, project)).filter(thread => thread.status === 'active' &&
         thread.archived === (args.archived ?? false) && (!project || thread.workspaceId === project.workspaceId) &&
         matchKey(thread.title).includes(matchKey(args.searchTerm)));
     const offset = Number(args.cursor?.match(/^active:(\d+)$/)?.[1] ?? 0);
@@ -437,36 +474,66 @@ export class DailyBridge extends Bridge {
       cursor = undefined;
     }
     if (!project.nativeProjectId) return { project, threads, nextCursor: null };
-    const result = await this.rpc('thread/list', { projectId: project.nativeProjectId, archived,
-      limit: Math.max(1, limit - threads.length), cursor, searchTerm: args.searchTerm, sourceKinds, useStateDbOnly: true });
-    if (threads.length === limit) return { project, threads, nextCursor: result.data.length ? `legacy:${legacyEnd}` : null };
-    threads.push(...result.data.map(thread => this.summarize(thread, state, projects)));
-    return { project, threads: threads.sort(activeFirst), nextCursor: result.nextCursor ?? null };
+    const params = { archived, searchTerm: args.searchTerm, sourceKinds, useStateDbOnly: true };
+    if (!cursor?.startsWith('cwd:')) {
+      const result = await this.rpc('thread/list', { ...params, projectId: project.nativeProjectId,
+        limit: Math.max(1, limit - threads.length), cursor });
+      if (threads.length === limit && result.data.length) return { project, threads, nextCursor: `legacy:${legacyEnd}` };
+      threads.push(...result.data.map(thread => this.summarize(thread, state, projects)));
+      if (result.nextCursor || project.sidebarStatus !== 'native_catalog' || !project.roots.length) {
+        return { project, threads: threads.sort(activeFirst), nextCursor: result.nextCursor ?? null };
+      }
+      cursor = 'cwd:';
+    }
+    if (project.sidebarStatus !== 'native_catalog' || !project.roots.length) {
+      throw new BridgeError('INVALID_CURSOR', 'Use the cursor returned by this project chat listing.');
+    }
+    let rootCursor = cursor.slice('cwd:'.length) || undefined;
+    do {
+      const remaining = limit - threads.length;
+      const result = await this.rpc('thread/list', { ...params, cwd: project.roots,
+        limit: remaining || limit, cursor: rootCursor });
+      const matches = result.data.filter(thread => !thread.projectId && !state['thread-project-assignments']?.[thread.id])
+        .map(thread => this.summarize(thread, state, projects, project))
+        .filter(thread => thread.workspaceId === project.workspaceId);
+      if (!remaining && matches.length) return { project, threads: threads.sort(activeFirst), nextCursor: `cwd:${rootCursor ?? ''}` };
+      threads.push(...matches);
+      rootCursor = result.nextCursor;
+      if (rootCursor && threads.length === limit && remaining) {
+        return { project, threads: threads.sort(activeFirst), nextCursor: `cwd:${rootCursor}` };
+      }
+    } while (rootCursor);
+    return { project, threads: threads.sort(activeFirst), nextCursor: null };
   }
 
   listAgyListeners() {
     return [...this.agyWatch.listeners(), ...this.desktop.listeners()];
   }
 
-  sendAgyMessage({ conversationId, requestId, text }) {
+  sendAgyMessage({ conversationId, requestId, text, attention }) {
     const listener = this.listAgyListeners().find(entry => entry.conversationId === conversationId);
     if (!listener) throw new BridgeError('AGY_LISTENER_INACTIVE', 'The selected conversation has no active background wait or Sidecar delivery path.');
     const event = this.store.transaction(() => {
       const event = this.store.event(listener.threadId, null, `agy-message:${requestId}`, 'agy_message', {
-        summary: text, source: 'codex_bridge_message', activeReport: false
+        summary: text, source: 'codex_bridge_message', activeReport: false, ...(attention && { attention })
       });
       this.store.run('INSERT INTO daily_messages (event,request,conversation,path) VALUES (?,?,?,?)', event.eventId, requestId, conversationId, listener.path);
       return event;
     });
-    return { conversationId, eventId: event.eventId, path: listener.path, state: 'accepted' };
+    const state = this.store.reportingMode() === 'direction_only' && !attention ? 'retained_in_inbox' : 'accepted';
+    return { conversationId, eventId: event.eventId, path: listener.path, state };
   }
 
   messageStatus(requestId) {
-    const row = this.store.get(`SELECT m.event AS eventId,m.conversation AS conversationId,m.path,m.returned,d.state
-      FROM daily_messages m LEFT JOIN push_deliveries d ON d.event=m.event WHERE m.request=?`, requestId);
+    const row = this.store.get(`SELECT m.event AS eventId,m.conversation AS conversationId,m.path,m.returned,d.state,
+      CASE WHEN ${dailyReceiptWakeFilter} THEN 1 ELSE 0 END AS wakeEligible
+      FROM daily_messages m JOIN events e ON e.seq=m.event
+      LEFT JOIN push_deliveries d ON d.event=m.event WHERE m.request=?`, requestId);
     if (!row) throw new BridgeError('AGY_MESSAGE_NOT_FOUND', 'Use the original Antigravity message request ID.');
-    const { returned, state, ...message } = row;
-    return { requestId, ...message, state: returned ? 'returned_to_waiter' : state ?? 'accepted' };
+    const { returned, state, wakeEligible, ...message } = row;
+    if (returned) return { requestId, ...message, state: 'returned_to_waiter' };
+    if (!wakeEligible && (!state || state === 'skipped')) return { requestId, ...message, state: 'retained_in_inbox' };
+    return { requestId, ...message, state: state ?? 'accepted' };
   }
 
   messageReturned(conversationId, event) {
@@ -477,13 +544,18 @@ export class DailyBridge extends Bridge {
     if (specs.has(name)) validate(specs.get(name), args);
     const { threadId, conversationId } = args;
     switch (name) {
-      case 'agy_list_listeners': return { listeners: this.listAgyListeners() };
+      case 'agy_list_listeners': return { listeners: this.listAgyListeners(), reportingMode: this.store.reportingMode() };
       case 'agy_send_message': return this.action(name, args, () => this.sendAgyMessage(args));
       case 'agy_message_status': return this.messageStatus(args.requestId);
+      case 'bridge_reporting_mode':
+        validate({ type: 'object', properties: { mode: { enum: ['normal', 'direction_only'] } }, additionalProperties: false }, args);
+        return { reportingMode: args.mode ? this.store.setReportingMode(args.mode) : this.store.reportingMode() };
+      case 'agy_watch_status':
+        return { watches: this.agyWatch.status(conversationId), reportingMode: this.store.reportingMode() };
       case 'bridge_status':
         await this.connectDaily();
         return { backend: 'existing_shared_codex_desktop', desktopTransport: this.desktopTransport,
-          scope: 'all_local_codex_for_antigravity', ready: true, defaultDelivery: 'direct' };
+          scope: 'all_local_codex_for_antigravity', ready: true, defaultDelivery: 'direct', reportingMode: this.store.reportingMode() };
       case 'codex_list_projects': {
         const term = matchKey(args.searchTerm);
         const projects = (await this.projectCatalog()).filter(project => projectKeys(project).some(value => value.includes(term)));
@@ -516,7 +588,12 @@ export class DailyBridge extends Bridge {
         return this.store.onUpdate('daily-dispatch', status, signal ?? new AbortController().signal, id => !id || id === args.requestId);
       }
       case 'codex_wait':
-        if (conversationId) for (const id of args.threadIds) this.schedule(id);
+        if (!conversationId) {
+          args.threadIds.forEach(id => this.receiptThread(id));
+          return this.store.wait(args.threadIds, args.after ?? 0, signal ?? new AbortController().signal,
+            `${dailyReceiptWakeFilter} AND ${dailyReplyTarget} IS NULL`);
+        }
+        for (const id of args.threadIds) this.schedule(id);
         return super.invoke(name, args, signal);
       case 'codex_recover_thread':
         this.thread(threadId);

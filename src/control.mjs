@@ -12,6 +12,7 @@ try {
     }
     console.log('bridge_shutdown  Stop an idle local bridge before changing its configuration.');
     if (daily) console.log('bridge_restart  Recycle the daily bridge worker while receipt waits reconnect.');
+    if (daily) console.log('bridge_reporting_mode  Read the local mode or set mode to "direction_only" or "normal".');
   } else {
     const input = raw === '--stdin' ? readFileSync(0, 'utf8') : raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw;
     const result = await invoke(method, JSON.parse(input.replace(/^\uFEFF/, '')));

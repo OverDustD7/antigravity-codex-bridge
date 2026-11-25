@@ -16,12 +16,15 @@ const requestId = { ...id, description: 'Unique stable ID for this action. Reuse
 const threadIds = { type: 'array', minItems: 1, maxItems: 8, items: threadId };
 const optionalModel = { model: id, effort };
 const purpose = { enum: ['message', 'coordination'] };
+const correctionAttention = { enum: ['course_correction'], description: 'Use only when a material deviation from the agreed direction needs a timely decision.' };
 const schema = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const tool = (name, description, properties, required, options = {}) => ({ name, description, inputSchema: schema(properties, required), ...options });
 const change = (name, description, properties, required) => tool(name, description, { requestId, ...properties }, ['requestId', ...required]);
 
 export const feedbackSchema = schema({
   kind: { enum: ['milestone', 'writing_request', 'decision', 'blocker', 'final'] },
+  attention: correctionAttention,
+  replyToRequestId: { ...id, description: 'Identify the exact Antigravity request that explicitly asked for this report.' },
   summary,
   artifacts: { type: 'array', maxItems: 8, items: { ...str, maxLength: 1000 } },
   evidence: summary,
@@ -31,7 +34,14 @@ export const feedbackSchema = schema({
 }, ['kind', 'summary']);
 
 export const milestoneContinuation = 'Milestone reporting is an additional progress update. Continue the next authorized step in this same turn and keep the original event listener for work in flight.';
-export const milestoneCadence = 'Balance Gemini usage with timely course correction. Combine nearby steps and short stages into one brief milestone report and check in during long stages while a change is still practical. Include the result, key evidence and next step.';
+export const milestoneCadence = [
+  'Each progress message can wake Gemini, including direct messages. Combine nearby steps and short stages in project notes, even when each passes its own technical acceptance.',
+  'Send one consolidated milestone at an agreed larger roadmap checkpoint. During a long stage, check in early only if waiting would delay a useful course correction. Bundle consecutive findings that support the same project goal or writing argument.',
+  'For multi-day work on a limited Gemini budget, one or two routine updates per active day is a guide, not a quota, timer, or cap. Send blockers that need coordination, major decisions, writing handoffs, and final delivery when they arise.',
+  'Include the result, key evidence, and next step.'
+].join(' ');
+export const agyMessageUse = `Use direct messaging for independent coordination. Apply the shared reporting cadence to any progress update sent here. ${milestoneCadence}`;
+export const directionOnlyCadence = 'The user has enabled direction-only reporting to conserve Gemini quota. Keep unsolicited routine progress in project notes. Reply to explicit report requests with their replyToRequestId. For material drift that needs timely coordination, send one concise message marked course_correction with the roadmap point, evidence, and proposed correction. The bridge sends a receipt whenever a watched Codex turn ends. Continue authorized work and keep existing listeners.';
 export const milestoneReview = '请用人话给用户讲清结果、关键证据、影响和下一步。用已确认的路线图核对本阶段目标、验收条件及关键约束。已读且未变的段落可沿用。只在方向重大偏移或证据支持更好的下一步时联系原 Codex 聊天。Codex 继续执行，无需阶段确认。';
 
 export const feedbackTool = {
@@ -54,8 +64,8 @@ export function receiptText({ event, nextCursor }) {
 
 export const agyMessagingTools = [
   tool('agy_list_listeners', 'List the currently reachable Antigravity conversations and their listening paths.'),
-  change('agy_send_message', 'Send a short message to one listening Antigravity conversation by ID. Use only for the specified coordination task.',
-    { conversationId: id, text: summary }, ['conversationId', 'text']),
+  change('agy_send_message', `Send a short message to one listening Antigravity conversation by ID. ${agyMessageUse}`,
+    { conversationId: id, text: summary, attention: correctionAttention }, ['conversationId', 'text']),
   tool('agy_message_status', 'Check delivery of a message using its original request ID.', { requestId }, ['requestId'])
 ];
 
@@ -81,8 +91,8 @@ export const tools = [
   change('codex_create_thread', 'Create a Codex chat, optionally starting its first turn. Set purpose to coordination when Antigravity will guide work or own milestone acceptance.', { workspaceId: id, title: id, prompt, conversationId: id, purpose, ...optionalModel }, ['workspaceId', 'title']),
   change('codex_fork_thread', 'Create an independent chat with the managed source chat history. Use for distinctly authorized work. Starts no model turn.', { threadId, title: id }, ['threadId', 'title']),
   change('codex_set_model', 'Set model and optional reasoning effort for later turns in this exact chat. The running turn retains its current settings.', { threadId, model: id, effort }, ['threadId', 'model']),
-  change('codex_send_message', 'Send to the exact Codex chat by ID. Ordinary messages default to unchanged text. Set purpose to coordination whenever Antigravity guides work or owns milestone acceptance. Set after_turn only to wait for the current turn.', {
-    threadId, prompt, purpose, delivery: { enum: ['next_turn', 'after_turn', 'steer'] }, expectedTurnId: id, decisionEventId: positiveCursor, conversationId: id
+  change('codex_send_message', 'Send to the exact Codex chat by ID. Ordinary messages default to unchanged text. Set purpose to coordination when guiding work. In daily mode set expectReport when the user explicitly requests a report or reply. Set after_turn only to wait for the current turn.', {
+    threadId, prompt, purpose, delivery: { enum: ['next_turn', 'after_turn', 'steer'] }, expectedTurnId: id, decisionEventId: positiveCursor, conversationId: id, expectReport: flag
   }, ['threadId', 'prompt']),
   change('codex_rename_thread', 'Rename a managed chat.', { threadId, title: id }, ['threadId', 'title']),
   change('codex_archive_thread', 'Archive or restore a managed chat. Active or uncertain turns must be resolved first.', { threadId, archived: flag }, ['threadId', 'archived']),

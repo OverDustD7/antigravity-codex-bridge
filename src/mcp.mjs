@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { invoke } from './client.mjs';
 import { daily, root } from './config.mjs';
-import { agyMessagingTools, receiptText, tools } from './protocol.mjs';
+import { agyMessageUse, agyMessagingTools, receiptText, tools } from './protocol.mjs';
 
 const uri = 'ui://agy-codex/inbox.html';
 const mimeType = 'text/html;profile=mcp-app';
@@ -36,7 +36,7 @@ lines.on('line', async line => {
       supportsUi = !codexMessaging && !!params?.capabilities?.extensions?.['io.modelcontextprotocol/ui'];
       send({ protocolVersion: versions.includes(params?.protocolVersion) ? params.protocolVersion : versions[0],
         serverInfo: { name: 'antigravity-codex-bridge', version: '0.1.0' }, capabilities: { tools: {}, resources: {} },
-        instructions: codexMessaging ? 'Use agy_list_listeners to find the intended active Antigravity conversation. Send a short message only to that conversation and keep the original request ID for retries.'
+        instructions: codexMessaging ? `Use agy_list_listeners to find the intended active Antigravity conversation. Send a short message only to that conversation and keep the original request ID for retries. ${agyMessageUse}`
           : daily ? 'Use the daily Codex bridge rules. Send directly to the exact chat by default. For each message directing the work or owning milestone acceptance, set purpose to coordination. For ordinary conversation, omit purpose or use message. Use after_turn only when the user asks to wait for the current turn to finish. Keep the same originating Antigravity conversation ID for dispatch and receipt waits.' : 'Use the Codex 协作桥 plugin rules. After dispatch open one codex_wait using the returned cursor. When a receipt is available, inspect its source and preserve the same thread ID.' });
       break;
     case 'ping': send({}); break;
